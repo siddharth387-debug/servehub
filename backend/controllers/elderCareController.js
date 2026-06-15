@@ -1,14 +1,25 @@
 const ElderCare = require('../models/ElderCare');
 
+const volunteerVisibleFilter = {
+  $or: [
+    { budget: { $exists: false } },
+    { budget: null },
+    { budget: { $lte: 0 } },
+    { paymentStatus: 'paid', budget: { $gt: 0 } },
+  ],
+};
+
 // @GET /api/elder-care - Get all requests (volunteers see open ones)
 exports.getRequests = async (req, res) => {
   try {
     const { serviceType, urgency, status, city, page = 1, limit = 10 } = req.query;
     const query = {};
 
-    // Non-admins/volunteers only see pending or their own
     if (req.user.role === 'volunteer') {
-      query.$or = [{ status: 'pending' }, { assignedVolunteer: req.user.id }];
+      query.$or = [
+        { assignedVolunteer: req.user.id },
+        { status: 'pending', ...volunteerVisibleFilter },
+      ];
     } else if (req.user.role === 'user') {
       query.requestedBy = req.user.id;
     }
@@ -35,8 +46,23 @@ exports.getRequests = async (req, res) => {
 // @POST /api/elder-care - Create a care request
 exports.createRequest = async (req, res) => {
   try {
-    const request = await ElderCare.create({ ...req.body, requestedBy: req.user.id });
-    res.status(201).json({ success: true, request });
+    const budget = Math.max(0, Number(req.body.budget) || 0);
+    const paymentStatus = budget > 0 ? 'unpaid' : 'paid';
+
+    const { paymentStatus: _ps, razorpayOrderId, razorpayPaymentId, status, assignedVolunteer, requestedBy, ...body } = req.body;
+
+    const request = await ElderCare.create({
+      ...body,
+      budget,
+      paymentStatus,
+      requestedBy: req.user.id,
+    });
+
+    res.status(201).json({
+      success: true,
+      request,
+      requiresPayment: budget > 0,
+    });
   } catch (err) {
     res.status(500).json({ message: err.message });
   }
@@ -48,11 +74,19 @@ exports.acceptRequest = async (req, res) => {
     const request = await ElderCare.findById(req.params.id);
     if (!request) return res.status(404).json({ message: 'Request not found' });
     if (request.status !== 'pending') return res.status(400).json({ message: 'Request already taken' });
+    if (request.isPaymentRequired() && request.paymentStatus !== 'paid') {
+      return res.status(402).json({ message: 'Payment pending — this request is not yet available' });
+    }
 
     request.status = 'accepted';
     request.assignedVolunteer = req.user.id;
     await request.save();
-    res.json({ success: true, message: 'Request accepted!', request });
+
+    const populated = await ElderCare.findById(request._id)
+      .populate('requestedBy', 'name phone avatar')
+      .populate('assignedVolunteer', 'name phone avatar');
+
+    res.json({ success: true, message: 'Request accepted!', request: populated });
   } catch (err) {
     res.status(500).json({ message: err.message });
   }

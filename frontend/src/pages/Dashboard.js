@@ -3,6 +3,7 @@ import { Link, useNavigate } from 'react-router-dom';
 import { useAuth } from "../context/AuthContext";
 import { API } from "../context/AuthContext";
 import toast from 'react-hot-toast';
+import { payForCareRequest, isUnpaid } from '../utils/razorpay';
 
 const TABS = [
   { id: 'overview', label: 'Overview', icon: '📊' },
@@ -18,6 +19,9 @@ const Dashboard = () => {
   const [profileForm, setProfileForm] = useState({ name: '', phone: '', bio: '', skills: '' });
   const [saving, setSaving] = useState(false);
   const [stats, setStats] = useState({ applications: 0, careRequests: 0, completedCare: 0 });
+  const [careRequests, setCareRequests] = useState([]);
+  const [careLoading, setCareLoading] = useState(false);
+  const [payingId, setPayingId] = useState(null);
 
   useEffect(() => {
     if (!user) { navigate('/login'); return; }
@@ -36,6 +40,31 @@ const Dashboard = () => {
       });
     }).catch(() => {});
   }, [user]);
+
+  useEffect(() => {
+    if (tab !== 'care-requests' || !user) return;
+    setCareLoading(true);
+    API.get('/elder-care')
+      .then(res => setCareRequests(res.data.requests))
+      .catch(() => toast.error('Failed to load care requests'))
+      .finally(() => setCareLoading(false));
+  }, [tab, user]);
+
+  const handlePayCare = async (req) => {
+    setPayingId(req._id);
+    try {
+      await payForCareRequest({ elderCareId: req._id, user });
+      toast.success('Payment successful! 💚');
+      const res = await API.get('/elder-care');
+      setCareRequests(res.data.requests);
+    } catch (err) {
+      if (!err.cancelled) toast.error(err.response?.data?.message || err.message || 'Payment failed');
+    } finally {
+      setPayingId(null);
+    }
+  };
+
+  const statusBadge = { pending: 'badge-orange', accepted: 'badge-blue', 'in-progress': 'badge-purple', completed: 'badge-green', cancelled: 'badge-gray' };
 
   const handleSaveProfile = async (e) => {
     e.preventDefault();
@@ -246,12 +275,55 @@ const Dashboard = () => {
         {/* CARE REQUESTS TAB */}
         {tab === 'care-requests' && (
           <div className="animate-in">
-            <div className="empty-state">
-              <div className="icon">❤️</div>
-              <h3>Care Requests</h3>
-              <p>Elder care requests you've submitted or accepted will appear here.</p>
-              <Link to="/elder-care" className="btn btn-accent mt-16">Go to Elder Care →</Link>
-            </div>
+            {careLoading ? (
+              <div className="spinner" />
+            ) : careRequests.length === 0 ? (
+              <div className="empty-state">
+                <div className="icon">❤️</div>
+                <h3>No care requests yet</h3>
+                <p>{user.role === 'volunteer'
+                  ? 'Browse open requests on the Elder Care page and accept one to help.'
+                  : 'Request help for an elder and track status here.'}</p>
+                <Link to="/elder-care" className="btn btn-accent mt-16">Go to Elder Care →</Link>
+              </div>
+            ) : (
+              <div className="care-list">
+                {careRequests.map(req => {
+                  const unpaid = isUnpaid(req);
+                  const owner = req.requestedBy?._id === user.id || req.requestedBy === user.id;
+                  return (
+                    <div key={req._id} className={`care-item ${unpaid ? 'care-unpaid' : ''}`}>
+                      <div className="ci-main">
+                        <div className="ci-top">
+                          <h3>{req.beneficiaryName} <span className="ci-age">Age {req.beneficiaryAge}</span></h3>
+                          <div className="ci-badges">
+                            {unpaid && <span className="badge badge-red">⏳ Unpaid</span>}
+                            {!unpaid && req.budget > 0 && <span className="badge badge-green">✓ Paid</span>}
+                            {(!req.budget || req.budget <= 0) && <span className="badge badge-blue">🤝 Volunteer</span>}
+                            <span className={`badge ${statusBadge[req.status]}`}>{req.status}</span>
+                          </div>
+                        </div>
+                        <p className="ci-desc">{req.description.length > 100 ? req.description.slice(0, 100) + '...' : req.description}</p>
+                        <div className="ci-meta">
+                          <span>📍 {req.address?.city}</span>
+                          <span>🔄 {req.frequency}</span>
+                          {req.budget > 0 && <span>💰 ₹{req.budget}</span>}
+                          {req.assignedVolunteer && <span>🙋 {req.assignedVolunteer.name}</span>}
+                        </div>
+                      </div>
+                      <div className="ci-actions">
+                        {owner && unpaid && (
+                          <button className="btn btn-accent btn-sm" onClick={() => handlePayCare(req)} disabled={payingId === req._id}>
+                            {payingId === req._id ? 'Processing...' : `💳 Pay ₹${req.budget}`}
+                          </button>
+                        )}
+                        <Link to="/elder-care" className="btn btn-outline btn-sm">View →</Link>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
           </div>
         )}
       </div>
@@ -308,6 +380,19 @@ const Dashboard = () => {
         .profile-avatar-big { width: 80px; height: 80px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 1.8rem; font-weight: 700; color: white; flex-shrink: 0; }
         .profile-avatar-section h2 { font-size: 1.5rem; margin-bottom: 4px; }
         .form-row-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+        .care-list { display: flex; flex-direction: column; gap: 16px; }
+        .care-item { background: white; border-radius: var(--radius-md); padding: 20px 24px; border: 1px solid var(--border); display: flex; align-items: center; justify-content: space-between; gap: 20px; transition: var(--transition); }
+        .care-item:hover { box-shadow: var(--shadow-sm); }
+        .care-unpaid { border: 2px dashed #F4A261; background: #FFFBF5; }
+        .ci-main { flex: 1; min-width: 0; }
+        .ci-top { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; margin-bottom: 6px; flex-wrap: wrap; }
+        .ci-top h3 { font-size: 1.05rem; margin: 0; }
+        .ci-age { font-weight: 400; color: var(--text-muted); font-size: 0.85rem; }
+        .ci-badges { display: flex; gap: 6px; flex-wrap: wrap; }
+        .ci-desc { font-size: 0.85rem; color: var(--text-muted); margin-bottom: 8px; line-height: 1.5; }
+        .ci-meta { display: flex; gap: 14px; flex-wrap: wrap; }
+        .ci-meta span { font-size: 0.78rem; color: var(--text-secondary); }
+        .ci-actions { display: flex; gap: 8px; flex-shrink: 0; flex-wrap: wrap; }
         @media (max-width: 1024px) {
           .quick-actions-grid { grid-template-columns: repeat(2, 1fr); }
         }

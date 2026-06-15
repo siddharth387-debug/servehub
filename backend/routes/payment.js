@@ -1,29 +1,10 @@
-const express = require("express");
-const Razorpay = require("razorpay");
-
+const express = require('express');
 const router = express.Router();
+const { protect } = require('../middleware/auth');
+const { getConfig, createOrder, verifyPayment } = require('../controllers/paymentController');
 
-const razorpay = new Razorpay({
-  key_id: process.env.KEY_ID,
-  key_secret: process.env.KEY_SECRET,
-});
-
-router.post("/create-order", async (req, res) => {
-  try {
-    const { amount } = req.body;
-
-    const options = {
-      amount: amount * 100, // convert ₹ to paise
-      currency: "INR",
-      receipt: "receipt_order_1",
-    };
-
-    const order = await razorpay.orders.create(options);
-
-    res.json(order);
-  } catch (err) {
-    res.status(500).json({ error: "Order creation failed" });
-  }
-});
+router.get('/config', protect, getConfig);
+router.post('/create-order', protect, createOrder);
+router.post('/verify', protect, verifyPayment);
 
 module.exports = router;

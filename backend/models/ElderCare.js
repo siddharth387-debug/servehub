@@ -34,10 +34,26 @@ const elderCareSchema = new mongoose.Schema({
     default: 'pending'
   },
   assignedVolunteer: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
-  budget: { type: Number },
+  budget: { type: Number, default: 0, min: 0 },
+  paymentStatus: {
+    type: String,
+    enum: ['unpaid', 'paid', 'refunded'],
+    default: 'paid'
+  },
+  razorpayOrderId: String,
+  razorpayPaymentId: String,
   rating: { type: Number, min: 1, max: 5 },
   feedback: { type: String },
   contactPhone: { type: String }
 }, { timestamps: true });
+
+elderCareSchema.methods.isPaymentRequired = function () {
+  return this.budget > 0;
+};
+
+elderCareSchema.methods.isVisibleToVolunteers = function () {
+  if (!this.isPaymentRequired()) return true;
+  return this.paymentStatus === 'paid';
+};
 
 module.exports = mongoose.model('ElderCare', elderCareSchema);
